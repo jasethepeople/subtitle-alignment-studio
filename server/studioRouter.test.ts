@@ -17,7 +17,7 @@ const editorData = {
   project: { id: "project-1", userId: 42, title: "Master Dialogue", sourceLanguage: "en", status: "ready", durationMs: 8_000, activeTrackId: "track-1", createdAt: new Date(), updatedAt: new Date() },
   assets: [],
   tracks: [{ id: "track-1", projectId: "project-1", name: "English", language: "en", format: "srt", isPrimary: true, styleProfile: null, createdAt: new Date(), updatedAt: new Date() }],
-  cues: [{ id: "cue-1", projectId: "project-1", trackId: "track-1", sequence: 1, startMs: 1_000, endMs: 2_000, plainText: "Hello", richText: "<i>Hello</i>", assStyle: null, speaker: null, alignmentConfidence: 0, sourceMetadata: null, createdAt: new Date(), updatedAt: new Date() }],
+  cues: [{ id: "cue-1", projectId: "project-1", trackId: "track-1", sequence: 1, startMs: 1_000, endMs: 2_000, plainText: "Hello", richText: "<i>Hello</i>", assStyle: null, speaker: null, alignmentConfidence: 0, qaStatus: "needs_review" as const, qaReason: "Alignment confidence fell below the 75% QA threshold.", sourceMetadata: null, createdAt: new Date(), updatedAt: new Date() }],
   translations: [],
   runs: [],
 };
@@ -50,5 +50,12 @@ describe("studio router", () => {
     expect(storage.storagePut).toHaveBeenCalledWith(expect.stringContaining("exports"), expect.stringContaining("<i>Hello</i>"), "application/x-subrip");
     expect(db.createMediaAsset).toHaveBeenCalledWith(expect.objectContaining({ kind: "export", filename: "master-dialogue-en.srt" }));
     expect(result).toEqual({ filename: "master-dialogue-en.srt", url: "/manus-storage/exports/master.srt" });
+  });
+
+  it("records a cue-level QA approval through the protected studio API", async () => {
+    db.getProjectEditorData.mockResolvedValue(editorData);
+    const result = await appRouter.createCaller(authenticatedContext()).studio.updateCueQa({ projectId: "project-1", cueId: "cue-1", qaStatus: "approved" });
+    expect(db.updateCue).toHaveBeenCalledWith("project-1", "cue-1", { qaStatus: "approved", qaReason: null });
+    expect(result).toEqual({ success: true });
   });
 });

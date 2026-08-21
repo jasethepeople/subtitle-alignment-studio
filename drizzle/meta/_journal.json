@@ -15,6 +15,13 @@
       "when": 1787310547423,
       "tag": "0001_futuristic_kabuki",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1787311467840,
+      "tag": "0002_magenta_bloodstorm",
+      "breakpoints": true
     }
   ]
 }

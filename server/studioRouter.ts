@@ -20,7 +20,7 @@ import {
 import { processVideoForAlignment, transcriptionMarkers } from "./mediaProcessing";
 import { protectedProcedure, router } from "./_core/trpc";
 import { storagePut } from "./storage";
-import { serializeAss, serializeSrt } from "./subtitles";
+import { serializeAss, serializePlainText, serializeSrt, serializeVtt } from "./subtitles";
 import { translateCueBatch } from "./translation";
 
 function requireProject<T>(value: T | undefined): T {
@@ -50,6 +50,11 @@ export const studioRouter = router({
     await updateCue(input.projectId, input.cueId, { startMs: input.startMs, endMs: input.endMs, richText: input.richText, plainText: input.richText.replace(/\{\\[^}]+\}|<\/?[^>]+>/g, "").replace(/\\N/g, " ").trim() });
     return { success: true };
   }),
+  updateCueQa: protectedProcedure.input(projectInput.extend({ cueId: z.string().min(4).max(64), qaStatus: z.enum(["clear", "needs_review", "approved"]), qaReason: z.string().trim().max(500).optional() })).mutation(async ({ ctx, input }) => {
+    requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    await updateCue(input.projectId, input.cueId, { qaStatus: input.qaStatus, qaReason: input.qaReason || null });
+    return { success: true };
+  }),
   autoAlign: protectedProcedure.input(projectInput).mutation(async ({ ctx, input }) => {
     const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
     const activeTrack = data.tracks.find(track => track.id === data.project.activeTrackId) || data.tracks.find(track => track.isPrimary);
@@ -72,7 +77,7 @@ export const studioRouter = router({
     const recommendation = recommendAlignment(trackCues, markers);
     const retimed = retimeCues(trackCues.map(cue => ({ id: cue.id, startMs: cue.startMs, endMs: cue.endMs, richText: cue.richText })), recommendation);
     const lookup = new Map(retimed.map(cue => [cue.id, cue]));
-    await replaceTrackCues(input.projectId, activeTrack.id, trackCues.map(cue => ({ ...cue, id: cue.id, startMs: lookup.get(cue.id)!.startMs, endMs: lookup.get(cue.id)!.endMs, alignmentConfidence: recommendation.confidence })));
+    await replaceTrackCues(input.projectId, activeTrack.id, trackCues.map(cue => ({ ...cue, id: cue.id, startMs: lookup.get(cue.id)!.startMs, endMs: lookup.get(cue.id)!.endMs, alignmentConfidence: recommendation.confidence, qaStatus: recommendation.confidence < 75 ? "needs_review" : "clear", qaReason: recommendation.confidence < 75 ? "Alignment confidence fell below the 75% QA threshold." : null })));
     await updateSubtitleProject(input.projectId, { status: "ready" });
     return recommendation;
   }),
@@ -119,13 +124,14 @@ export const studioRouter = router({
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error instanceof Error ? error.message : "Translation failed." });
     }
   }),
-  export: protectedProcedure.input(projectInput.extend({ trackId: z.string().min(4).max(64), format: z.enum(["srt", "ass"]) })).mutation(async ({ ctx, input }) => {
+  export: protectedProcedure.input(projectInput.extend({ trackId: z.string().min(4).max(64), format: z.enum(["srt", "ass", "vtt", "txt"]) })).mutation(async ({ ctx, input }) => {
     const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
     const track = data.tracks.find(item => item.id === input.trackId);
     if (!track) throw new TRPCError({ code: "NOT_FOUND", message: "Subtitle track not found." });
     const cues = data.cues.filter(cue => cue.trackId === track.id);
-    const output = input.format === "srt"
-      ? serializeSrt(cues)
+    const output = input.format === "srt" ? serializeSrt(cues)
+      : input.format === "vtt" ? serializeVtt(cues)
+      : input.format === "txt" ? serializePlainText(cues)
       : serializeAss(cues.map(cue => ({
           startMs: cue.startMs,
           endMs: cue.endMs,
@@ -134,8 +140,9 @@ export const studioRouter = router({
           speaker: cue.speaker || undefined,
         })), track.styleProfile);
     const filename = `${data.project.title.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase()}-${track.language}.${input.format}`;
-    const stored = await storagePut(`projects/${input.projectId}/exports/${filename}`, output, input.format === "srt" ? "application/x-subrip" : "text/x-ssa");
-    await createMediaAsset({ id: nanoid(), projectId: input.projectId, kind: "export", storageKey: stored.key, storageUrl: stored.url, filename, mimeType: input.format === "srt" ? "application/x-subrip" : "text/x-ssa", sizeBytes: Buffer.byteLength(output) });
+    const mimeType = input.format === "srt" ? "application/x-subrip" : input.format === "ass" ? "text/x-ssa" : input.format === "vtt" ? "text/vtt" : "text/plain";
+    const stored = await storagePut(`projects/${input.projectId}/exports/${filename}`, output, mimeType);
+    await createMediaAsset({ id: nanoid(), projectId: input.projectId, kind: "export", storageKey: stored.key, storageUrl: stored.url, filename, mimeType, sizeBytes: Buffer.byteLength(output) });
     return { filename, url: stored.url };
   }),
 });

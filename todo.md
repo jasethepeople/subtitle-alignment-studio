@@ -16,3 +16,9 @@
 - [x] Add accessible keyboard interactions, loading/error states, and responsive editor fallbacks.
 - [x] Add Vitest coverage for subtitle parsing, formatting-token protection, retiming, export fidelity, and core tRPC workflow validation.
 - [x] Validate the UI visually, run type-checking and tests, and create a final project checkpoint.
+- [x] Add resumable multipart video ingestion with persistent upload-session records, chunk validation, progress reporting, and source-file finalization.
+- [x] Add deterministic WebVTT and plain-text subtitle serializers plus authenticated export options in the delivery panel.
+- [x] Add waveform zoom and horizontal navigation while keeping cue drag, scrub, and playhead precision intact.
+- [x] Add cue-level alignment QA flags, confidence filters, review state controls, and a low-confidence review queue.
+- [x] Add unit coverage for multipart upload orchestration, VTT/text export fidelity, and QA flag behavior; visually validate the enhanced editor.
+- [x] Add integration-style coverage for multipart session creation, missing-part rejection, and successful source-video finalization.

@@ -94,6 +94,15 @@ export function serializeAss(cues: Pick<ParsedCue, "startMs" | "endMs" | "richTe
   return `${preparedHeader.trimEnd()}\n${rows.join("\n")}\n`;
 }
 
+export function serializeVtt(cues: Pick<ParsedCue, "sequence" | "startMs" | "endMs" | "richText">[]) {
+  const body = cues.map((cue, index) => `${cue.sequence || index + 1}\n${formatVttTimestamp(cue.startMs)} --> ${formatVttTimestamp(cue.endMs)}\n${assMarkupToVtt(cue.richText)}`).join("\n\n");
+  return `WEBVTT\n\n${body}\n`;
+}
+
+export function serializePlainText(cues: Pick<ParsedCue, "startMs" | "endMs" | "plainText">[]) {
+  return cues.map(cue => `[${formatVttTimestamp(cue.startMs)} → ${formatVttTimestamp(cue.endMs)}]\n${cue.plainText}`).join("\n\n") + "\n";
+}
+
 export function formatSrtTimestamp(ms: number) {
   const value = Math.max(0, Math.round(ms));
   const hours = Math.floor(value / 3_600_000);
@@ -110,6 +119,15 @@ export function formatAssTimestamp(ms: number) {
   const seconds = Math.floor((value % 60_000) / 1_000);
   const centis = Math.floor((value % 1_000) / 10);
   return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(centis).padStart(2, "0")}`;
+}
+
+export function formatVttTimestamp(ms: number) {
+  const value = Math.max(0, Math.round(ms));
+  const hours = Math.floor(value / 3_600_000);
+  const minutes = Math.floor((value % 3_600_000) / 60_000);
+  const seconds = Math.floor((value % 60_000) / 1_000);
+  const millis = value % 1_000;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
 
 function parseSrtTimestamp(value: string) {
@@ -152,4 +170,13 @@ function srtMarkupToAss(value: string) {
     .replace(/<i>/gi, "{\\i1}").replace(/<\/i>/gi, "{\\i0}")
     .replace(/<b>/gi, "{\\b1}").replace(/<\/b>/gi, "{\\b0}")
     .replace(/<u>/gi, "{\\u1}").replace(/<\/u>/gi, "{\\u0}");
+}
+
+function assMarkupToVtt(value: string) {
+  return value
+    .replace(/\{\\i1\}/gi, "<i>").replace(/\{\\i0\}/gi, "</i>")
+    .replace(/\{\\b1\}/gi, "<b>").replace(/\{\\b0\}/gi, "</b>")
+    .replace(/\{\\u1\}/gi, "<u>").replace(/\{\\u0\}/gi, "</u>")
+    .replace(/\{\\[^}]+\}/g, "")
+    .replace(/\\N/g, "\n");
 }

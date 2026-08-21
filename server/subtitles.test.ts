@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAss, parseSrt, serializeAss, serializeSrt } from "./subtitles";
+import { parseAss, parseSrt, serializeAss, serializePlainText, serializeSrt, serializeVtt } from "./subtitles";
 
 describe("subtitle parser and serializer", () => {
   it("preserves SRT formatting tags and millisecond timecodes", () => {
@@ -13,5 +13,11 @@ describe("subtitle parser and serializer", () => {
     const parsed = parseAss("[Script Info]\nTitle: Test\n\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\nDialogue: 0,0:00:01.20,0:00:03.50,Top,ALICE,0,0,0,,{\\an8}{\\i1}Hello{\\i0}\n");
     expect(parsed.cues[0]).toMatchObject({ startMs: 1200, endMs: 3500, assStyle: "Top", speaker: "ALICE", richText: "{\\an8}{\\i1}Hello{\\i0}" });
     expect(serializeAss(parsed.cues, parsed.styleProfile)).toContain("{\\an8}{\\i1}Hello{\\i0}");
+  });
+
+  it("serializes synchronised WebVTT and plain-text delivery files", () => {
+    const cues = [{ sequence: 1, startMs: 1250, endMs: 3500, richText: "{\\i1}Hello{\\i0}", plainText: "Hello" }];
+    expect(serializeVtt(cues)).toContain("00:00:01.250 --> 00:00:03.500\n<i>Hello</i>");
+    expect(serializePlainText(cues)).toContain("[00:00:01.250 → 00:00:03.500]\nHello");
   });
 });

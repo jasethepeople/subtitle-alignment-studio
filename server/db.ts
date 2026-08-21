@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -8,6 +8,8 @@ import {
   subtitleProjects,
   subtitleTracks,
   translationRuns,
+  uploadParts,
+  uploadSessions,
   users,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -134,6 +136,9 @@ export async function deleteSubtitleProject(userId: number, projectId: string) {
   await db.delete(mediaAssets).where(eq(mediaAssets.projectId, projectId));
   await db.delete(translationRuns).where(eq(translationRuns.projectId, projectId));
   await db.delete(processingRuns).where(eq(processingRuns.projectId, projectId));
+  const sessions = await db.select({ id: uploadSessions.id }).from(uploadSessions).where(eq(uploadSessions.projectId, projectId));
+  for (const session of sessions) await db.delete(uploadParts).where(eq(uploadParts.sessionId, session.id));
+  await db.delete(uploadSessions).where(eq(uploadSessions.projectId, projectId));
   await db.delete(subtitleProjects).where(and(eq(subtitleProjects.id, projectId), eq(subtitleProjects.userId, userId)));
   return true;
 }
@@ -193,4 +198,31 @@ export async function createTranslationRun(values: typeof translationRuns.$infer
 export async function updateTranslationRun(runId: string, values: Partial<typeof translationRuns.$inferInsert>) {
   const db = requireDb(await getDb());
   await db.update(translationRuns).set(values).where(eq(translationRuns.id, runId));
+}
+
+export async function createUploadSession(values: typeof uploadSessions.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(uploadSessions).values(values);
+  return getUploadSessionForUser(values.userId, values.id);
+}
+
+export async function getUploadSessionForUser(userId: number, sessionId: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(uploadSessions).where(and(eq(uploadSessions.userId, userId), eq(uploadSessions.id, sessionId))).limit(1);
+  return rows[0];
+}
+
+export async function listUploadParts(sessionId: string) {
+  const db = requireDb(await getDb());
+  return db.select().from(uploadParts).where(eq(uploadParts.sessionId, sessionId)).orderBy(asc(uploadParts.partNumber));
+}
+
+export async function upsertUploadPart(values: typeof uploadParts.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(uploadParts).values(values).onDuplicateKeyUpdate({ set: { storageKey: values.storageKey, sizeBytes: values.sizeBytes } });
+}
+
+export async function updateUploadSession(sessionId: string, values: Partial<typeof uploadSessions.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(uploadSessions).set(values).where(eq(uploadSessions.id, sessionId));
 }

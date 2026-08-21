@@ -1,4 +1,4 @@
-import { boolean, int, json, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { bigint, boolean, int, json, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -45,7 +45,7 @@ export const mediaAssets = mysqlTable("mediaAssets", {
   storageUrl: text("storageUrl").notNull(),
   filename: varchar("filename", { length: 255 }).notNull(),
   mimeType: varchar("mimeType", { length: 128 }).notNull(),
-  sizeBytes: int("sizeBytes"),
+  sizeBytes: bigint("sizeBytes", { mode: "number" }),
   metadata: json("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -74,6 +74,8 @@ export const subtitleCues = mysqlTable("subtitleCues", {
   assStyle: varchar("assStyle", { length: 128 }),
   speaker: varchar("speaker", { length: 128 }),
   alignmentConfidence: int("alignmentConfidence").default(0).notNull(),
+  qaStatus: mysqlEnum("qaStatus", ["clear", "needs_review", "approved"]).default("needs_review").notNull(),
+  qaReason: text("qaReason"),
   sourceMetadata: json("sourceMetadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -100,6 +102,31 @@ export const processingRuns = mysqlTable("processingRuns", {
   summary: text("summary"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const uploadSessions = mysqlTable("uploadSessions", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  userId: int("userId").notNull(),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  mimeType: varchar("mimeType", { length: 128 }).notNull(),
+  totalBytes: bigint("totalBytes", { mode: "number" }).notNull(),
+  chunkSize: int("chunkSize").notNull(),
+  totalParts: int("totalParts").notNull(),
+  status: mysqlEnum("status", ["uploading", "assembling", "completed", "failed"]).default("uploading").notNull(),
+  finalAssetId: varchar("finalAssetId", { length: 36 }),
+  errorMessage: text("errorMessage"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const uploadParts = mysqlTable("uploadParts", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  sessionId: varchar("sessionId", { length: 36 }).notNull(),
+  partNumber: int("partNumber").notNull(),
+  storageKey: text("storageKey").notNull(),
+  sizeBytes: bigint("sizeBytes", { mode: "number" }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
 export type SubtitleProject = typeof subtitleProjects.$inferSelect;
