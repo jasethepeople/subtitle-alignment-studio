@@ -1,6 +1,15 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import {
+  InsertUser,
+  mediaAssets,
+  processingRuns,
+  subtitleCues,
+  subtitleProjects,
+  subtitleTracks,
+  translationRuns,
+  users,
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -89,4 +98,99 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+function requireDb<T>(db: T | null): T {
+  if (!db) throw new Error("Database is unavailable. Please try again shortly.");
+  return db;
+}
+
+export async function listProjectsForUser(userId: number) {
+  const db = requireDb(await getDb());
+  return db.select().from(subtitleProjects).where(eq(subtitleProjects.userId, userId)).orderBy(desc(subtitleProjects.updatedAt));
+}
+
+export async function getProjectForUser(userId: number, projectId: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(subtitleProjects).where(and(eq(subtitleProjects.userId, userId), eq(subtitleProjects.id, projectId))).limit(1);
+  return rows[0];
+}
+
+export async function createSubtitleProject(values: typeof subtitleProjects.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(subtitleProjects).values(values);
+  return getProjectForUser(values.userId, values.id);
+}
+
+export async function updateSubtitleProject(projectId: string, values: Partial<typeof subtitleProjects.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(subtitleProjects).set(values).where(eq(subtitleProjects.id, projectId));
+}
+
+export async function deleteSubtitleProject(userId: number, projectId: string) {
+  const db = requireDb(await getDb());
+  const project = await getProjectForUser(userId, projectId);
+  if (!project) return false;
+  await db.delete(subtitleCues).where(eq(subtitleCues.projectId, projectId));
+  await db.delete(subtitleTracks).where(eq(subtitleTracks.projectId, projectId));
+  await db.delete(mediaAssets).where(eq(mediaAssets.projectId, projectId));
+  await db.delete(translationRuns).where(eq(translationRuns.projectId, projectId));
+  await db.delete(processingRuns).where(eq(processingRuns.projectId, projectId));
+  await db.delete(subtitleProjects).where(and(eq(subtitleProjects.id, projectId), eq(subtitleProjects.userId, userId)));
+  return true;
+}
+
+export async function getProjectEditorData(userId: number, projectId: string) {
+  const project = await getProjectForUser(userId, projectId);
+  if (!project) return undefined;
+  const db = requireDb(await getDb());
+  const [assets, tracks, cues, translations, runs] = await Promise.all([
+    db.select().from(mediaAssets).where(eq(mediaAssets.projectId, projectId)),
+    db.select().from(subtitleTracks).where(eq(subtitleTracks.projectId, projectId)),
+    db.select().from(subtitleCues).where(eq(subtitleCues.projectId, projectId)).orderBy(subtitleCues.sequence),
+    db.select().from(translationRuns).where(eq(translationRuns.projectId, projectId)).orderBy(desc(translationRuns.createdAt)),
+    db.select().from(processingRuns).where(eq(processingRuns.projectId, projectId)).orderBy(desc(processingRuns.createdAt)),
+  ]);
+  return { project, assets, tracks, cues, translations, runs };
+}
+
+export async function createMediaAsset(values: typeof mediaAssets.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(mediaAssets).values(values);
+  return values;
+}
+
+export async function createSubtitleTrack(values: typeof subtitleTracks.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(subtitleTracks).values(values);
+  return values;
+}
+
+export async function replaceTrackCues(projectId: string, trackId: string, cues: Array<typeof subtitleCues.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.delete(subtitleCues).where(and(eq(subtitleCues.projectId, projectId), eq(subtitleCues.trackId, trackId)));
+  if (cues.length) await db.insert(subtitleCues).values(cues);
+}
+
+export async function updateCue(projectId: string, cueId: string, values: Partial<typeof subtitleCues.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(subtitleCues).set(values).where(and(eq(subtitleCues.projectId, projectId), eq(subtitleCues.id, cueId)));
+}
+
+export async function createProcessingRun(values: typeof processingRuns.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(processingRuns).values(values);
+}
+
+export async function updateProcessingRun(runId: string, values: Partial<typeof processingRuns.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(processingRuns).set(values).where(eq(processingRuns.id, runId));
+}
+
+export async function createTranslationRun(values: typeof translationRuns.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(translationRuns).values(values);
+}
+
+export async function updateTranslationRun(runId: string, values: Partial<typeof translationRuns.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(translationRuns).set(values).where(eq(translationRuns.id, runId));
+}

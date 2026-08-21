@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { boolean, int, json, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -25,4 +25,84 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+export const subtitleProjects = mysqlTable("subtitleProjects", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  userId: int("userId").notNull(),
+  title: varchar("title", { length: 180 }).notNull(),
+  sourceLanguage: varchar("sourceLanguage", { length: 16 }).default("auto").notNull(),
+  status: mysqlEnum("status", ["draft", "queued", "processing", "ready", "attention", "failed"]).default("draft").notNull(),
+  durationMs: int("durationMs"),
+  activeTrackId: varchar("activeTrackId", { length: 36 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const mediaAssets = mysqlTable("mediaAssets", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  kind: mysqlEnum("kind", ["video", "subtitle", "audio", "waveform", "transcription", "export"]).notNull(),
+  storageKey: text("storageKey").notNull(),
+  storageUrl: text("storageUrl").notNull(),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  mimeType: varchar("mimeType", { length: 128 }).notNull(),
+  sizeBytes: int("sizeBytes"),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const subtitleTracks = mysqlTable("subtitleTracks", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  name: varchar("name", { length: 180 }).notNull(),
+  language: varchar("language", { length: 16 }).default("und").notNull(),
+  format: mysqlEnum("format", ["srt", "ass"]).notNull(),
+  isPrimary: boolean("isPrimary").default(false).notNull(),
+  styleProfile: text("styleProfile"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const subtitleCues = mysqlTable("subtitleCues", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  trackId: varchar("trackId", { length: 36 }).notNull(),
+  sequence: int("sequence").notNull(),
+  startMs: int("startMs").notNull(),
+  endMs: int("endMs").notNull(),
+  plainText: text("plainText").notNull(),
+  richText: text("richText").notNull(),
+  assStyle: varchar("assStyle", { length: 128 }),
+  speaker: varchar("speaker", { length: 128 }),
+  alignmentConfidence: int("alignmentConfidence").default(0).notNull(),
+  sourceMetadata: json("sourceMetadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const translationRuns = mysqlTable("translationRuns", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  sourceTrackId: varchar("sourceTrackId", { length: 36 }).notNull(),
+  targetTrackId: varchar("targetTrackId", { length: 36 }),
+  targetLanguage: varchar("targetLanguage", { length: 16 }).notNull(),
+  model: varchar("model", { length: 128 }),
+  status: mysqlEnum("status", ["queued", "processing", "ready", "failed"]).default("queued").notNull(),
+  errorMessage: text("errorMessage"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const processingRuns = mysqlTable("processingRuns", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  type: mysqlEnum("type", ["parse", "waveform", "transcription", "alignment", "export"]).notNull(),
+  status: mysqlEnum("status", ["queued", "processing", "ready", "failed"]).default("queued").notNull(),
+  summary: text("summary"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type SubtitleProject = typeof subtitleProjects.$inferSelect;
+export type MediaAsset = typeof mediaAssets.$inferSelect;
+export type SubtitleTrack = typeof subtitleTracks.$inferSelect;
+export type SubtitleCue = typeof subtitleCues.$inferSelect;
