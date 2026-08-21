@@ -4,14 +4,16 @@ import type { TrpcContext } from "./_core/context";
 const db = vi.hoisted(() => ({
   createCueComment: vi.fn(), createCueStatusHistory: vi.fn(), createDeliveryAuditEvent: vi.fn(), createMediaAsset: vi.fn(), createProcessingRun: vi.fn(), createProjectActivity: vi.fn(), createProjectInvitation: vi.fn(), createProjectMembership: vi.fn(), createSubtitleProject: vi.fn(), createSubtitleTrack: vi.fn(), createTranslationRun: vi.fn(),
   deleteSubtitleProject: vi.fn(), getInvitationByToken: vi.fn(), getProjectEditorData: vi.fn(), listProjectsForUser: vi.fn(), replaceTrackCues: vi.fn(), updateCue: vi.fn(),
-  updateProcessingRun: vi.fn(), updateProjectInvitation: vi.fn(), updateSubtitleProject: vi.fn(), updateTranslationRun: vi.fn(), upsertCueAssignment: vi.fn(),
+  updateProcessingRun: vi.fn(), updateProjectInvitation: vi.fn(), updateSubtitleProject: vi.fn(), updateTranslationRun: vi.fn(), upsertCueAssignment: vi.fn(), upsertNotificationPreference: vi.fn(), getOwnerNotificationPreference: vi.fn(),
 }));
 const storage = vi.hoisted(() => ({ storagePut: vi.fn() }));
 const ownerNotification = vi.hoisted(() => ({ notifyOwner: vi.fn().mockResolvedValue(true) }));
+const emailDelivery = vi.hoisted(() => ({ sendInvitationEmail: vi.fn().mockResolvedValue({ delivered: true, providerId: "email-123" }) }));
 
 vi.mock("./db", () => db);
 vi.mock("./storage", () => storage);
 vi.mock("./_core/notification", () => ownerNotification);
+vi.mock("./email", () => emailDelivery);
 
 import { appRouter } from "./routers";
 
@@ -22,7 +24,7 @@ const editorData = {
   tracks: [{ id: "track-1", projectId: "project-1", name: "English", language: "en", format: "srt", isPrimary: true, styleProfile: null, createdAt: new Date(), updatedAt: new Date() }],
   cues: [{ id: "cue-1", projectId: "project-1", trackId: "track-1", sequence: 1, startMs: 1_000, endMs: 2_000, plainText: "Hello", richText: "<i>Hello</i>", assStyle: null, speaker: null, alignmentConfidence: 0, qaStatus: "needs_review" as const, qaReason: "Alignment confidence fell below the 75% QA threshold.", sourceMetadata: null, createdAt: new Date(), updatedAt: new Date() }],
   translations: [],
-  runs: [], assignments: [], comments: [], history: [], memberships: [], invitations: [], activities: [], auditEvents: [],
+  runs: [], assignments: [], comments: [], history: [], memberships: [], invitations: [], activities: [], auditEvents: [], notificationPreference: null,
 };
 
 function authenticatedContext(): TrpcContext {
@@ -47,6 +49,11 @@ describe("studio router", () => {
   it("requires authentication before adding reviewer comments", async () => {
     const caller = appRouter.createCaller({ ...authenticatedContext(), user: null });
     await expect(caller.studio.addCueComment({ projectId: "project-1", cueId: "cue-1", body: "Untrusted note" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("requires authentication before saving notification preferences", async () => {
+    const caller = appRouter.createCaller({ ...authenticatedContext(), user: null });
+    await expect(caller.studio.saveNotificationPreferences({ projectId: "project-1", inviteEvents: true, qaEvents: true, deliveryEvents: true, exportEvents: true, auditEvents: true })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
   it("creates a user-owned session through the project API", async () => {
@@ -81,10 +88,20 @@ describe("studio router", () => {
   it("creates a time-limited collaborator invitation for the project owner", async () => {
     db.getProjectEditorData.mockResolvedValue(editorData);
     const result = await appRouter.createCaller(authenticatedContext()).studio.inviteCollaborator({ projectId: "project-1", email: "reviewer@example.com", role: "reviewer" });
-    expect(db.createProjectInvitation).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", email: "reviewer@example.com", role: "reviewer", invitedByUserId: 42, status: "pending", deliveryMode: "link_copy", deliveryStatus: "deferred" }));
-    expect(db.createProjectActivity).toHaveBeenCalledWith(expect.objectContaining({ eventType: "invitation_created", metadata: expect.objectContaining({ delivery: "link_copy_fallback" }) }));
-    expect(ownerNotification.notifyOwner).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining("Collaborator invite prepared") }));
+    expect(emailDelivery.sendInvitationEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "reviewer@example.com", role: "reviewer" }));
+    expect(db.createProjectInvitation).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", email: "reviewer@example.com", role: "reviewer", invitedByUserId: 42, status: "pending", deliveryMode: "provider_email", deliveryStatus: "sent" }));
+    expect(db.createProjectActivity).toHaveBeenCalledWith(expect.objectContaining({ eventType: "invitation_created", metadata: expect.objectContaining({ delivery: "provider_email" }) }));
+    expect(ownerNotification.notifyOwner).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining("Collaborator invitation emailed") }));
     expect(result.token).toHaveLength(40);
+  });
+
+  it("suppresses an owner invitation alert when invite notifications are disabled", async () => {
+    db.getProjectEditorData.mockResolvedValue(editorData);
+    db.getOwnerNotificationPreference.mockResolvedValue({ inviteEvents: false, qaEvents: true, deliveryEvents: true, exportEvents: true, auditEvents: true });
+    ownerNotification.notifyOwner.mockClear();
+    await appRouter.createCaller(authenticatedContext()).studio.inviteCollaborator({ projectId: "project-1", email: "silent@example.com", role: "viewer" });
+    expect(db.createProjectActivity).toHaveBeenCalledWith(expect.objectContaining({ eventType: "invitation_created" }));
+    expect(ownerNotification.notifyOwner).not.toHaveBeenCalled();
   });
 
   it("records manual secure-link delivery after an owner copies an invitation", async () => {
@@ -148,5 +165,22 @@ describe("studio router", () => {
     const result = await appRouter.createCaller(authenticatedContext()).studio.addCueComment({ projectId: "project-1", cueId: "cue-1", body: "Check the speaker handoff." });
     expect(db.createCueComment).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", cueId: "cue-1", authorUserId: 42, body: "Check the speaker handoff." }));
     expect(result).toEqual({ success: true });
+  });
+
+  it("persists a collaborator's project notification preferences", async () => {
+    db.getProjectEditorData.mockResolvedValue(editorData);
+    const result = await appRouter.createCaller(authenticatedContext()).studio.saveNotificationPreferences({ projectId: "project-1", inviteEvents: true, qaEvents: false, deliveryEvents: true, exportEvents: false, auditEvents: true });
+    expect(db.upsertNotificationPreference).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", userId: 42, qaEvents: false, exportEvents: false }));
+    expect(result).toEqual({ success: true });
+  });
+
+  it("filters signed audit entries by action and collaborator for reviewers", async () => {
+    db.getProjectEditorData.mockResolvedValue({ ...editorData, auditEvents: [
+      { id: "audit-1", action: "delivery_approved", actorName: "Mia Chen", createdAt: new Date(), payloadDigest: "a".repeat(64), signature: "b".repeat(64) },
+      { id: "audit-2", action: "subtitle_exported", actorName: "Noah Lee", createdAt: new Date(), payloadDigest: "c".repeat(64), signature: "d".repeat(64) },
+    ] });
+    const result = await appRouter.createCaller(authenticatedContext()).studio.searchDeliveryAudit({ projectId: "project-1", action: "delivery_approved", collaborator: "mia" });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.id).toBe("audit-1");
   });
 });

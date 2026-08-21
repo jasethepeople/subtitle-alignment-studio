@@ -38,3 +38,8 @@
 - [x] Add workspace controls for notification activity, invite delivery status, and audit-trail verification/export.
 - [x] Add tests for notification creation, invitation delivery state, audit signature verification/tamper detection/export, and activity-feed presentation; visually validate the enhanced workspace.
 - [x] Keep third-party invitation email delivery disabled until a valid provider credential is supplied; retain secure invite-link copying and delivery-status fallback in the meantime.
+- [x] Add verified Resend invitation email delivery with link-copy fallback, provider delivery status, and safe failure handling.
+- [x] Add per-user project notification preferences for invites, QA scans, delivery review, approvals, exports, and audit events.
+- [x] Add server-side searchable delivery-audit queries filtered by action and collaborator, with role-governed access.
+- [x] Add workspace controls for notification preferences, email invitation delivery, and audit search/filtering.
+- [x] Add tests for email delivery, preference authorization, and filtered audit queries; visually validate the updated workspace.

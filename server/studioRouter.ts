@@ -16,6 +16,7 @@ import {
   createTranslationRun,
   deleteSubtitleProject,
   getInvitationByToken,
+  getOwnerNotificationPreference,
   getProjectEditorData,
   listProjectsForUser,
   replaceTrackCues,
@@ -25,6 +26,7 @@ import {
   updateSubtitleProject,
   updateTranslationRun,
   upsertCueAssignment,
+  upsertNotificationPreference,
 } from "./db";
 import { processVideoForAlignment, transcriptionMarkers } from "./mediaProcessing";
 import { protectedProcedure, router } from "./_core/trpc";
@@ -35,6 +37,7 @@ import { translateCueBatch } from "./translation";
 import { analyzeCueQa } from "./qaChecks";
 import { buildQaCsv, buildQaPdf, type QaReportData } from "./reports";
 import { signAuditPayload, verifyAuditPayload, type AuditPayload } from "./audit";
+import { sendInvitationEmail } from "./email";
 
 function requireProject<T>(value: T | undefined): T {
   if (!value) throw new TRPCError({ code: "NOT_FOUND", message: "Subtitle project not found." });
@@ -57,7 +60,9 @@ function reportData(data: { project: { title: string; deliveryStatus: string }; 
 async function recordActivity(input: { projectId: string; eventType: "invitation_created" | "invitation_accepted" | "invitation_revoked" | "qa_completed" | "delivery_submitted" | "delivery_approved" | "subtitle_exported" | "report_exported"; actorUserId?: number; actorName?: string; recipientUserId?: number; title: string; body: string; metadata?: Record<string, unknown>; alertOwner?: boolean }) {
   const { alertOwner, ...activity } = input;
   await createProjectActivity({ id: nanoid(), ...activity, metadata: activity.metadata || null });
-  if (alertOwner) {
+  const preference = alertOwner ? await getOwnerNotificationPreference(activity.projectId) : undefined;
+  const eventPreference = activity.eventType.startsWith("invitation_") ? preference?.inviteEvents : activity.eventType === "qa_completed" ? preference?.qaEvents : activity.eventType === "delivery_submitted" || activity.eventType === "delivery_approved" ? preference?.deliveryEvents : activity.eventType === "subtitle_exported" ? preference?.exportEvents : preference?.auditEvents;
+  if (alertOwner && eventPreference !== false) {
     const accepted = await notifyOwner({ title: `SyncForge · ${activity.title}`, content: activity.body }).catch(() => false);
     if (!accepted) console.warn("[Activity] Owner alert was not accepted; retained in the in-app activity feed.");
   }
@@ -224,9 +229,13 @@ export const studioRouter = router({
     requireProjectRole(data, "owner");
     const token = nanoid(40);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000);
-    await createProjectInvitation({ id: nanoid(), projectId: input.projectId, email: input.email.toLowerCase(), role: input.role, token, invitedByUserId: ctx.user.id, expiresAt, status: "pending", deliveryMode: "link_copy", deliveryStatus: "deferred", deliveredAt: null });
-    await recordActivity({ projectId: input.projectId, eventType: "invitation_created", actorUserId: ctx.user.id, actorName: ctx.user.name || "Owner", title: "Collaborator invite prepared", body: `Invite link for ${input.email.toLowerCase()} is ready. Outbound email delivery is deferred until a provider key is configured.`, metadata: { email: input.email.toLowerCase(), role: input.role, delivery: "link_copy_fallback" }, alertOwner: true });
-    return { token, expiresAt };
+    const host = ctx.req.get?.("host") || ctx.req.headers.host || "app.manus.space";
+    const origin = `${ctx.req.protocol}://${host}`;
+    const inviteUrl = `${origin}/invite/${token}`;
+    const delivery = await sendInvitationEmail({ to: input.email.toLowerCase(), inviterName: ctx.user.name || "A project owner", projectTitle: data.project.title, role: input.role, inviteUrl });
+    await createProjectInvitation({ id: nanoid(), projectId: input.projectId, email: input.email.toLowerCase(), role: input.role, token, invitedByUserId: ctx.user.id, expiresAt, status: "pending", deliveryMode: delivery.delivered ? "provider_email" : "link_copy", deliveryStatus: delivery.delivered ? "sent" : "deferred", deliveredAt: delivery.delivered ? new Date() : null });
+    await recordActivity({ projectId: input.projectId, eventType: "invitation_created", actorUserId: ctx.user.id, actorName: ctx.user.name || "Owner", title: delivery.delivered ? "Collaborator invitation emailed" : "Collaborator invite prepared", body: delivery.delivered ? `An invitation email was sent to ${input.email.toLowerCase()}.` : `Email delivery was unavailable: ${delivery.error} Copy the secure invitation link to deliver it manually.`, metadata: { email: input.email.toLowerCase(), role: input.role, delivery: delivery.delivered ? "provider_email" : "link_copy_fallback" }, alertOwner: true });
+    return { token, expiresAt, deliveryStatus: delivery.delivered ? "sent" : "deferred", deliveryError: delivery.delivered ? null : delivery.error };
   }),
   revokeInvitation: protectedProcedure.input(projectInput.extend({ invitationId: z.string().min(4).max(64) })).mutation(async ({ ctx, input }) => {
     const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
@@ -301,5 +310,16 @@ export const studioRouter = router({
     await createMediaAsset({ id: nanoid(), projectId: input.projectId, kind: "export", storageKey: stored.key, storageUrl: stored.url, filename, mimeType: "text/csv", sizeBytes: Buffer.byteLength(output) });
     await recordActivity({ projectId: input.projectId, eventType: "report_exported", actorUserId: ctx.user.id, actorName: ctx.user.name || "Producer", title: "Signed delivery ledger exported", body: `${filename} is ready for download.`, metadata: { filename, report: "delivery_audit" } });
     return { filename, url: stored.url };
+  }),
+  saveNotificationPreferences: protectedProcedure.input(projectInput.extend({ inviteEvents: z.boolean(), qaEvents: z.boolean(), deliveryEvents: z.boolean(), exportEvents: z.boolean(), auditEvents: z.boolean() })).mutation(async ({ ctx, input }) => {
+    requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    await upsertNotificationPreference({ id: `${input.projectId}-${ctx.user.id}`.slice(0, 36), projectId: input.projectId, userId: ctx.user.id, inviteEvents: input.inviteEvents, qaEvents: input.qaEvents, deliveryEvents: input.deliveryEvents, exportEvents: input.exportEvents, auditEvents: input.auditEvents });
+    return { success: true };
+  }),
+  searchDeliveryAudit: protectedProcedure.input(projectInput.extend({ action: z.enum(["approval_requested", "delivery_approved", "subtitle_exported"]).optional(), collaborator: z.string().trim().max(128).optional() })).query(async ({ ctx, input }) => {
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    requireProjectRole(data, "reviewer");
+    const collaborator = input.collaborator?.toLowerCase();
+    return data.auditEvents.filter(event => (!input.action || event.action === input.action) && (!collaborator || event.actorName.toLowerCase().includes(collaborator))).slice(0, 100);
   }),
 });

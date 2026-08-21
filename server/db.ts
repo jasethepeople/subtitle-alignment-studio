@@ -11,6 +11,7 @@ import {
   projectInvitations,
   projectActivities,
   projectMemberships,
+  projectNotificationPreferences,
   subtitleCues,
   subtitleProjects,
   subtitleTracks,
@@ -166,6 +167,7 @@ export async function deleteSubtitleProject(userId: number, projectId: string) {
   await db.delete(cueStatusHistory).where(eq(cueStatusHistory.projectId, projectId));
   await db.delete(projectMemberships).where(eq(projectMemberships.projectId, projectId));
   await db.delete(projectInvitations).where(eq(projectInvitations.projectId, projectId));
+  await db.delete(projectNotificationPreferences).where(eq(projectNotificationPreferences.projectId, projectId));
   await db.delete(projectActivities).where(eq(projectActivities.projectId, projectId));
   await db.delete(deliveryAuditEvents).where(eq(deliveryAuditEvents.projectId, projectId));
   const sessions = await db.select({ id: uploadSessions.id }).from(uploadSessions).where(eq(uploadSessions.projectId, projectId));
@@ -180,7 +182,7 @@ export async function getProjectEditorData(userId: number, projectId: string) {
   if (!access) return undefined;
   const { project, accessRole } = access;
   const db = requireDb(await getDb());
-  const [assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations, activities, auditEvents] = await Promise.all([
+  const [assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations, activities, auditEvents, preference] = await Promise.all([
     db.select().from(mediaAssets).where(eq(mediaAssets.projectId, projectId)),
     db.select().from(subtitleTracks).where(eq(subtitleTracks.projectId, projectId)),
     db.select().from(subtitleCues).where(eq(subtitleCues.projectId, projectId)).orderBy(subtitleCues.sequence),
@@ -193,8 +195,9 @@ export async function getProjectEditorData(userId: number, projectId: string) {
     db.select().from(projectInvitations).where(eq(projectInvitations.projectId, projectId)).orderBy(desc(projectInvitations.createdAt)),
     db.select().from(projectActivities).where(eq(projectActivities.projectId, projectId)).orderBy(desc(projectActivities.createdAt)),
     db.select().from(deliveryAuditEvents).where(eq(deliveryAuditEvents.projectId, projectId)).orderBy(desc(deliveryAuditEvents.createdAt)),
+    db.select().from(projectNotificationPreferences).where(and(eq(projectNotificationPreferences.projectId, projectId), eq(projectNotificationPreferences.userId, userId))).limit(1),
   ]);
-  return { project, accessRole, assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations, activities, auditEvents };
+  return { project, accessRole, assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations, activities, auditEvents, notificationPreference: preference[0] || null };
 }
 
 export async function createMediaAsset(values: typeof mediaAssets.$inferInsert) {
@@ -311,4 +314,26 @@ export async function createProjectActivity(values: typeof projectActivities.$in
 export async function createDeliveryAuditEvent(values: typeof deliveryAuditEvents.$inferInsert) {
   const db = requireDb(await getDb());
   await db.insert(deliveryAuditEvents).values(values);
+}
+
+export async function upsertNotificationPreference(values: typeof projectNotificationPreferences.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(projectNotificationPreferences).values(values).onDuplicateKeyUpdate({
+    set: {
+      inviteEvents: values.inviteEvents,
+      qaEvents: values.qaEvents,
+      deliveryEvents: values.deliveryEvents,
+      exportEvents: values.exportEvents,
+      auditEvents: values.auditEvents,
+    },
+  });
+}
+
+export async function getOwnerNotificationPreference(projectId: string) {
+  const db = requireDb(await getDb());
+  const projects = await db.select({ userId: subtitleProjects.userId }).from(subtitleProjects).where(eq(subtitleProjects.id, projectId)).limit(1);
+  const ownerId = projects[0]?.userId;
+  if (!ownerId) return undefined;
+  const preferences = await db.select().from(projectNotificationPreferences).where(and(eq(projectNotificationPreferences.projectId, projectId), eq(projectNotificationPreferences.userId, ownerId))).limit(1);
+  return preferences[0];
 }

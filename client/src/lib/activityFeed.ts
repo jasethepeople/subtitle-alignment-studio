@@ -1,4 +1,14 @@
 export type ActivityFeedItem = { eventType: string; title: string; body: string; createdAt: Date | string };
+export type ActivityPreferences = { inviteEvents: boolean; qaEvents: boolean; deliveryEvents: boolean; exportEvents: boolean; auditEvents: boolean };
+
+export function isActivityEnabled(item: ActivityFeedItem, preferences: ActivityPreferences) {
+  if (item.eventType.startsWith("invitation_")) return preferences.inviteEvents;
+  if (item.eventType === "qa_completed") return preferences.qaEvents;
+  if (item.eventType === "delivery_submitted" || item.eventType === "delivery_approved") return preferences.deliveryEvents;
+  if (item.eventType === "subtitle_exported") return preferences.exportEvents;
+  if (item.eventType === "report_exported") return preferences.auditEvents;
+  return true;
+}
 
 export function activityPresentation(item: ActivityFeedItem) {
   const timestamp = new Date(item.createdAt).toLocaleString();

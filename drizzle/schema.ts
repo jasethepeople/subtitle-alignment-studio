@@ -192,6 +192,19 @@ export const projectInvitations = mysqlTable("projectInvitations", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export const projectNotificationPreferences = mysqlTable("projectNotificationPreferences", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  userId: int("userId").notNull(),
+  inviteEvents: boolean("inviteEvents").default(true).notNull(),
+  qaEvents: boolean("qaEvents").default(true).notNull(),
+  deliveryEvents: boolean("deliveryEvents").default(true).notNull(),
+  exportEvents: boolean("exportEvents").default(true).notNull(),
+  auditEvents: boolean("auditEvents").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export const projectActivities = mysqlTable("projectActivities", {
   id: varchar("id", { length: 36 }).primaryKey(),
   projectId: varchar("projectId", { length: 36 }).notNull(),
