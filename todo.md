@@ -27,3 +27,8 @@
 - [x] Add deterministic overlap and reading-speed QA analysis, cue-level warning reasons, and QA summary counts.
 - [x] Add editor controls for upload preferences, reviewer assignment, comment threads, history, and one-click automated QA scans.
 - [x] Add test coverage for upload scheduling, review-history authorization, overlap detection, and reading-speed warnings; validate the enhanced workspace visually.
+- [x] Add invite-based project collaborator records with role assignment, secure acceptance, expiration, and revocation flows.
+- [x] Enforce project-scoped permissions for owner, producer, reviewer, and viewer roles; add approval gates that prevent unapproved delivery.
+- [x] Generate producer-ready QA summaries and downloadable CSV/PDF reports covering cue timing, QA flags, assignments, comments, and approval state.
+- [x] Add editor controls for collaborator invitations, access roles, delivery approval, and CSV/PDF report export.
+- [x] Add tests for invitation lifecycle, permission gates, report fidelity, and approval-state enforcement; visually validate the expanded workspace.

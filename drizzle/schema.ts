@@ -35,6 +35,7 @@ export const subtitleProjects = mysqlTable("subtitleProjects", {
   activeTrackId: varchar("activeTrackId", { length: 36 }),
   uploadConcurrency: int("uploadConcurrency").default(2).notNull(),
   uploadRetryLimit: int("uploadRetryLimit").default(3).notNull(),
+  deliveryStatus: mysqlEnum("deliveryStatus", ["draft", "in_review", "approved"]).default("draft").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -161,6 +162,30 @@ export const cueStatusHistory = mysqlTable("cueStatusHistory", {
   reason: text("reason"),
   changedByUserId: int("changedByUserId"),
   changedByName: varchar("changedByName", { length: 128 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const projectMemberships = mysqlTable("projectMemberships", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  userId: int("userId").notNull(),
+  role: mysqlEnum("role", ["producer", "reviewer", "viewer"]).notNull(),
+  invitedByUserId: int("invitedByUserId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const projectInvitations = mysqlTable("projectInvitations", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  role: mysqlEnum("role", ["producer", "reviewer", "viewer"]).notNull(),
+  token: varchar("token", { length: 96 }).notNull().unique(),
+  invitedByUserId: int("invitedByUserId").notNull(),
+  status: mysqlEnum("status", ["pending", "accepted", "revoked", "expired"]).default("pending").notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  acceptedAt: timestamp("acceptedAt"),
+  acceptedByUserId: int("acceptedByUserId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

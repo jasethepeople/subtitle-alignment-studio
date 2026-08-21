@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   cueAssignments,
@@ -7,6 +7,8 @@ import {
   InsertUser,
   mediaAssets,
   processingRuns,
+  projectInvitations,
+  projectMemberships,
   subtitleCues,
   subtitleProjects,
   subtitleTracks,
@@ -110,13 +112,31 @@ function requireDb<T>(db: T | null): T {
 
 export async function listProjectsForUser(userId: number) {
   const db = requireDb(await getDb());
-  return db.select().from(subtitleProjects).where(eq(subtitleProjects.userId, userId)).orderBy(desc(subtitleProjects.updatedAt));
+  const [owned, memberships] = await Promise.all([
+    db.select().from(subtitleProjects).where(eq(subtitleProjects.userId, userId)).orderBy(desc(subtitleProjects.updatedAt)),
+    db.select().from(projectMemberships).where(eq(projectMemberships.userId, userId)),
+  ]);
+  const sharedIds = memberships.map(membership => membership.projectId).filter(projectId => !owned.some(project => project.id === projectId));
+  if (!sharedIds.length) return owned;
+  const shared = await db.select().from(subtitleProjects).where(inArray(subtitleProjects.id, sharedIds)).orderBy(desc(subtitleProjects.updatedAt));
+  return [...owned, ...shared].sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
 }
 
 export async function getProjectForUser(userId: number, projectId: string) {
   const db = requireDb(await getDb());
   const rows = await db.select().from(subtitleProjects).where(and(eq(subtitleProjects.userId, userId), eq(subtitleProjects.id, projectId))).limit(1);
   return rows[0];
+}
+
+export async function getProjectAccess(userId: number, projectId: string) {
+  const db = requireDb(await getDb());
+  const project = await getProjectForUser(userId, projectId);
+  if (project) return { project, accessRole: "owner" as const, membership: undefined };
+  const memberships = await db.select().from(projectMemberships).where(and(eq(projectMemberships.userId, userId), eq(projectMemberships.projectId, projectId))).limit(1);
+  const membership = memberships[0];
+  if (!membership) return undefined;
+  const projects = await db.select().from(subtitleProjects).where(eq(subtitleProjects.id, projectId)).limit(1);
+  return projects[0] ? { project: projects[0], accessRole: membership.role, membership } : undefined;
 }
 
 export async function createSubtitleProject(values: typeof subtitleProjects.$inferInsert) {
@@ -142,6 +162,8 @@ export async function deleteSubtitleProject(userId: number, projectId: string) {
   await db.delete(cueAssignments).where(eq(cueAssignments.projectId, projectId));
   await db.delete(cueComments).where(eq(cueComments.projectId, projectId));
   await db.delete(cueStatusHistory).where(eq(cueStatusHistory.projectId, projectId));
+  await db.delete(projectMemberships).where(eq(projectMemberships.projectId, projectId));
+  await db.delete(projectInvitations).where(eq(projectInvitations.projectId, projectId));
   const sessions = await db.select({ id: uploadSessions.id }).from(uploadSessions).where(eq(uploadSessions.projectId, projectId));
   for (const session of sessions) await db.delete(uploadParts).where(eq(uploadParts.sessionId, session.id));
   await db.delete(uploadSessions).where(eq(uploadSessions.projectId, projectId));
@@ -150,10 +172,11 @@ export async function deleteSubtitleProject(userId: number, projectId: string) {
 }
 
 export async function getProjectEditorData(userId: number, projectId: string) {
-  const project = await getProjectForUser(userId, projectId);
-  if (!project) return undefined;
+  const access = await getProjectAccess(userId, projectId);
+  if (!access) return undefined;
+  const { project, accessRole } = access;
   const db = requireDb(await getDb());
-  const [assets, tracks, cues, translations, runs, assignments, comments, history] = await Promise.all([
+  const [assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations] = await Promise.all([
     db.select().from(mediaAssets).where(eq(mediaAssets.projectId, projectId)),
     db.select().from(subtitleTracks).where(eq(subtitleTracks.projectId, projectId)),
     db.select().from(subtitleCues).where(eq(subtitleCues.projectId, projectId)).orderBy(subtitleCues.sequence),
@@ -162,8 +185,10 @@ export async function getProjectEditorData(userId: number, projectId: string) {
     db.select().from(cueAssignments).where(eq(cueAssignments.projectId, projectId)).orderBy(desc(cueAssignments.updatedAt)),
     db.select().from(cueComments).where(eq(cueComments.projectId, projectId)).orderBy(desc(cueComments.createdAt)),
     db.select().from(cueStatusHistory).where(eq(cueStatusHistory.projectId, projectId)).orderBy(desc(cueStatusHistory.createdAt)),
+    db.select().from(projectMemberships).where(eq(projectMemberships.projectId, projectId)).orderBy(desc(projectMemberships.createdAt)),
+    db.select().from(projectInvitations).where(eq(projectInvitations.projectId, projectId)).orderBy(desc(projectInvitations.createdAt)),
   ]);
-  return { project, assets, tracks, cues, translations, runs, assignments, comments, history };
+  return { project, accessRole, assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations };
 }
 
 export async function createMediaAsset(values: typeof mediaAssets.$inferInsert) {
@@ -249,4 +274,25 @@ export async function createCueComment(values: typeof cueComments.$inferInsert) 
 export async function createCueStatusHistory(values: typeof cueStatusHistory.$inferInsert) {
   const db = requireDb(await getDb());
   await db.insert(cueStatusHistory).values(values);
+}
+
+export async function createProjectInvitation(values: typeof projectInvitations.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(projectInvitations).values(values);
+}
+
+export async function getInvitationByToken(token: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(projectInvitations).where(eq(projectInvitations.token, token)).limit(1);
+  return rows[0];
+}
+
+export async function updateProjectInvitation(id: string, values: Partial<typeof projectInvitations.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(projectInvitations).set(values).where(eq(projectInvitations.id, id));
+}
+
+export async function createProjectMembership(values: typeof projectMemberships.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(projectMemberships).values(values);
 }
