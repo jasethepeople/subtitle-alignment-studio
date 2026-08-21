@@ -32,3 +32,9 @@
 - [x] Generate producer-ready QA summaries and downloadable CSV/PDF reports covering cue timing, QA flags, assignments, comments, and approval state.
 - [x] Add editor controls for collaborator invitations, access roles, delivery approval, and CSV/PDF report export.
 - [x] Add tests for invitation lifecycle, permission gates, report fidelity, and approval-state enforcement; visually validate the expanded workspace.
+- [x] Add explicit invitation delivery-state fields and persist link-copy/email-deferred fallback status with owner alerts.
+- [x] Add persistent collaborator activity and notification records for invite, acceptance, QA, delivery-submission, approval, and export events.
+- [x] Add an append-only HMAC-signed delivery audit trail for approval and final export actions, including verification support and export.
+- [x] Add workspace controls for notification activity, invite delivery status, and audit-trail verification/export.
+- [x] Add tests for notification creation, invitation delivery state, audit signature verification/tamper detection/export, and activity-feed presentation; visually validate the enhanced workspace.
+- [x] Keep third-party invitation email delivery disabled until a valid provider credential is supplied; retain secure invite-link copying and delivery-status fallback in the meantime.

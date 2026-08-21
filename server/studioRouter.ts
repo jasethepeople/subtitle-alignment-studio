@@ -5,8 +5,10 @@ import { recommendAlignment, retimeCues, type SpeechMarker } from "./alignment";
 import {
   createCueComment,
   createCueStatusHistory,
+  createDeliveryAuditEvent,
   createMediaAsset,
   createProcessingRun,
+  createProjectActivity,
   createProjectInvitation,
   createProjectMembership,
   createSubtitleProject,
@@ -26,11 +28,13 @@ import {
 } from "./db";
 import { processVideoForAlignment, transcriptionMarkers } from "./mediaProcessing";
 import { protectedProcedure, router } from "./_core/trpc";
+import { notifyOwner } from "./_core/notification";
 import { storagePut } from "./storage";
 import { serializeAss, serializePlainText, serializeSrt, serializeVtt } from "./subtitles";
 import { translateCueBatch } from "./translation";
 import { analyzeCueQa } from "./qaChecks";
 import { buildQaCsv, buildQaPdf, type QaReportData } from "./reports";
+import { signAuditPayload, verifyAuditPayload, type AuditPayload } from "./audit";
 
 function requireProject<T>(value: T | undefined): T {
   if (!value) throw new TRPCError({ code: "NOT_FOUND", message: "Subtitle project not found." });
@@ -48,6 +52,21 @@ function requireProjectRole(data: { accessRole: ProjectRole }, minimum: ProjectR
 
 function reportData(data: { project: { title: string; deliveryStatus: string }; cues: QaReportData["cues"]; assignments: QaReportData["assignments"]; comments: QaReportData["comments"] }): QaReportData {
   return { title: data.project.title, deliveryStatus: data.project.deliveryStatus, generatedAt: new Date(), cues: data.cues, assignments: data.assignments, comments: data.comments };
+}
+
+async function recordActivity(input: { projectId: string; eventType: "invitation_created" | "invitation_accepted" | "invitation_revoked" | "qa_completed" | "delivery_submitted" | "delivery_approved" | "subtitle_exported" | "report_exported"; actorUserId?: number; actorName?: string; recipientUserId?: number; title: string; body: string; metadata?: Record<string, unknown>; alertOwner?: boolean }) {
+  const { alertOwner, ...activity } = input;
+  await createProjectActivity({ id: nanoid(), ...activity, metadata: activity.metadata || null });
+  if (alertOwner) {
+    const accepted = await notifyOwner({ title: `SyncForge · ${activity.title}`, content: activity.body }).catch(() => false);
+    if (!accepted) console.warn("[Activity] Owner alert was not accepted; retained in the in-app activity feed.");
+  }
+}
+
+async function recordSignedAudit(input: { projectId: string; action: "approval_requested" | "delivery_approved" | "subtitle_exported"; actorUserId: number; actorName: string; details: Record<string, unknown> }) {
+  const payload: AuditPayload = { projectId: input.projectId, action: input.action, actorUserId: input.actorUserId, actorName: input.actorName, occurredAt: new Date().toISOString(), details: input.details };
+  const signed = signAuditPayload(payload);
+  await createDeliveryAuditEvent({ id: nanoid(), projectId: input.projectId, action: input.action, actorUserId: input.actorUserId, actorName: input.actorName, payload, payloadDigest: signed.payloadDigest, signature: signed.signature });
 }
 
 export const studioRouter = router({
@@ -115,6 +134,7 @@ export const studioRouter = router({
       await updateCue(input.projectId, cue.id, { qaStatus, qaReason });
       if (cue.qaStatus !== qaStatus || cue.qaReason !== qaReason) await createCueStatusHistory({ id: nanoid(), projectId: input.projectId, cueId: cue.id, previousStatus: cue.qaStatus, nextStatus: qaStatus, reason: qaReason, changedByUserId: ctx.user.id, changedByName: ctx.user.name || "QA scan" });
     }));
+    await recordActivity({ projectId: input.projectId, eventType: "qa_completed", actorUserId: ctx.user.id, actorName: ctx.user.name || "Reviewer", title: "Automated QA scan completed", body: `${findings.filter(finding => finding.reasons.length).length} of ${cues.length} cues need review.`, metadata: { scanned: cues.length, flagged: findings.filter(finding => finding.reasons.length).length }, alertOwner: true });
     return { scanned: cues.length, flagged: findings.filter(finding => finding.reasons.length).length, overlapFlags: findings.filter(finding => finding.overlapMs > 0).length, speedFlags: findings.filter(finding => finding.charactersPerSecond > 20).length };
   }),
   autoAlign: protectedProcedure.input(projectInput).mutation(async ({ ctx, input }) => {
@@ -195,6 +215,8 @@ export const studioRouter = router({
     const mimeType = input.format === "srt" ? "application/x-subrip" : input.format === "ass" ? "text/x-ssa" : input.format === "vtt" ? "text/vtt" : "text/plain";
     const stored = await storagePut(`projects/${input.projectId}/exports/${filename}`, output, mimeType);
     await createMediaAsset({ id: nanoid(), projectId: input.projectId, kind: "export", storageKey: stored.key, storageUrl: stored.url, filename, mimeType, sizeBytes: Buffer.byteLength(output) });
+    await recordActivity({ projectId: input.projectId, eventType: "subtitle_exported", actorUserId: ctx.user.id, actorName: ctx.user.name || "Collaborator", title: "Approved subtitle export generated", body: `${filename} was generated after delivery approval.`, metadata: { filename, format: input.format } });
+    await recordSignedAudit({ projectId: input.projectId, action: "subtitle_exported", actorUserId: ctx.user.id, actorName: ctx.user.name || "Collaborator", details: { filename, format: input.format, trackId: track.id, deliveryStatus: data.project.deliveryStatus } });
     return { filename, url: stored.url };
   }),
   inviteCollaborator: protectedProcedure.input(projectInput.extend({ email: z.string().trim().email().max(320), role: roleInput })).mutation(async ({ ctx, input }) => {
@@ -202,7 +224,8 @@ export const studioRouter = router({
     requireProjectRole(data, "owner");
     const token = nanoid(40);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000);
-    await createProjectInvitation({ id: nanoid(), projectId: input.projectId, email: input.email.toLowerCase(), role: input.role, token, invitedByUserId: ctx.user.id, expiresAt, status: "pending" });
+    await createProjectInvitation({ id: nanoid(), projectId: input.projectId, email: input.email.toLowerCase(), role: input.role, token, invitedByUserId: ctx.user.id, expiresAt, status: "pending", deliveryMode: "link_copy", deliveryStatus: "deferred", deliveredAt: null });
+    await recordActivity({ projectId: input.projectId, eventType: "invitation_created", actorUserId: ctx.user.id, actorName: ctx.user.name || "Owner", title: "Collaborator invite prepared", body: `Invite link for ${input.email.toLowerCase()} is ready. Outbound email delivery is deferred until a provider key is configured.`, metadata: { email: input.email.toLowerCase(), role: input.role, delivery: "link_copy_fallback" }, alertOwner: true });
     return { token, expiresAt };
   }),
   revokeInvitation: protectedProcedure.input(projectInput.extend({ invitationId: z.string().min(4).max(64) })).mutation(async ({ ctx, input }) => {
@@ -210,6 +233,16 @@ export const studioRouter = router({
     requireProjectRole(data, "owner");
     if (!data.invitations.some(invitation => invitation.id === input.invitationId)) throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found." });
     await updateProjectInvitation(input.invitationId, { status: "revoked" });
+    await recordActivity({ projectId: input.projectId, eventType: "invitation_revoked", actorUserId: ctx.user.id, actorName: ctx.user.name || "Owner", title: "Collaborator invite revoked", body: "A pending project invitation was revoked.", metadata: { invitationId: input.invitationId } });
+    return { success: true };
+  }),
+  markInvitationLinkCopied: protectedProcedure.input(projectInput.extend({ invitationId: z.string().min(4).max(64) })).mutation(async ({ ctx, input }) => {
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    requireProjectRole(data, "owner");
+    const invitation = data.invitations.find(item => item.id === input.invitationId);
+    if (!invitation || invitation.status !== "pending") throw new TRPCError({ code: "NOT_FOUND", message: "Active invitation not found." });
+    await updateProjectInvitation(input.invitationId, { deliveryMode: "link_copy", deliveryStatus: "link_copied", deliveredAt: new Date() });
+    await recordActivity({ projectId: input.projectId, eventType: "invitation_created", actorUserId: ctx.user.id, actorName: ctx.user.name || "Owner", title: "Invitation link copied", body: `Secure invite link for ${invitation.email} was copied for manual delivery.`, metadata: { invitationId: invitation.id, delivery: "link_copied" } });
     return { success: true };
   }),
   acceptInvitation: protectedProcedure.input(z.object({ token: z.string().min(16).max(96) })).mutation(async ({ ctx, input }) => {
@@ -219,12 +252,15 @@ export const studioRouter = router({
     if (!ctx.user.email || ctx.user.email.toLowerCase() !== invitation.email.toLowerCase()) throw new TRPCError({ code: "FORBIDDEN", message: "Sign in with the invited email address to accept this invitation." });
     await createProjectMembership({ id: nanoid(), projectId: invitation.projectId, userId: ctx.user.id, role: invitation.role, invitedByUserId: invitation.invitedByUserId });
     await updateProjectInvitation(invitation.id, { status: "accepted", acceptedAt: new Date(), acceptedByUserId: ctx.user.id });
+    await recordActivity({ projectId: invitation.projectId, eventType: "invitation_accepted", actorUserId: ctx.user.id, actorName: ctx.user.name || "Collaborator", recipientUserId: invitation.invitedByUserId, title: "Collaborator joined the project", body: `${ctx.user.name || "A collaborator"} accepted a ${invitation.role} invitation.`, metadata: { role: invitation.role }, alertOwner: true });
     return { projectId: invitation.projectId, role: invitation.role };
   }),
   requestDeliveryApproval: protectedProcedure.input(projectInput).mutation(async ({ ctx, input }) => {
     const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
     requireProjectRole(data, "reviewer");
     await updateSubtitleProject(input.projectId, { deliveryStatus: "in_review" });
+    await recordActivity({ projectId: input.projectId, eventType: "delivery_submitted", actorUserId: ctx.user.id, actorName: ctx.user.name || "Reviewer", title: "Delivery submitted for approval", body: "A reviewer submitted the subtitle deliverables for producer approval.", alertOwner: true });
+    await recordSignedAudit({ projectId: input.projectId, action: "approval_requested", actorUserId: ctx.user.id, actorName: ctx.user.name || "Reviewer", details: { deliveryStatus: "in_review" } });
     return { success: true };
   }),
   approveDelivery: protectedProcedure.input(projectInput).mutation(async ({ ctx, input }) => {
@@ -232,6 +268,8 @@ export const studioRouter = router({
     requireProjectRole(data, "producer");
     if (data.project.deliveryStatus !== "in_review") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Delivery must be submitted for review before approval." });
     await updateSubtitleProject(input.projectId, { deliveryStatus: "approved" });
+    await recordActivity({ projectId: input.projectId, eventType: "delivery_approved", actorUserId: ctx.user.id, actorName: ctx.user.name || "Producer", title: "Delivery approved", body: "A producer approved subtitle exports for this project.", alertOwner: true });
+    await recordSignedAudit({ projectId: input.projectId, action: "delivery_approved", actorUserId: ctx.user.id, actorName: ctx.user.name || "Producer", details: { previousStatus: "in_review", deliveryStatus: "approved" } });
     return { success: true };
   }),
   exportQaReport: protectedProcedure.input(projectInput.extend({ format: z.enum(["csv", "pdf"]) })).mutation(async ({ ctx, input }) => {
@@ -243,6 +281,25 @@ export const studioRouter = router({
     const mimeType = input.format === "csv" ? "text/csv" : "application/pdf";
     const stored = await storagePut(`projects/${input.projectId}/reports/${filename}`, content, mimeType);
     await createMediaAsset({ id: nanoid(), projectId: input.projectId, kind: "export", storageKey: stored.key, storageUrl: stored.url, filename, mimeType, sizeBytes: Buffer.byteLength(content) });
+    await recordActivity({ projectId: input.projectId, eventType: "report_exported", actorUserId: ctx.user.id, actorName: ctx.user.name || "Reviewer", title: "Producer QA report generated", body: `${filename} is ready for download.`, metadata: { filename, format: input.format } });
+    return { filename, url: stored.url };
+  }),
+  verifyDeliveryAudit: protectedProcedure.input(projectInput.extend({ auditEventId: z.string().min(4).max(64) })).query(async ({ ctx, input }) => {
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    const event = data.auditEvents.find(item => item.id === input.auditEventId);
+    if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "Audit event not found." });
+    const valid = verifyAuditPayload(event.payload as AuditPayload, event.signature);
+    return { valid, action: event.action, payloadDigest: event.payloadDigest, createdAt: event.createdAt };
+  }),
+  exportDeliveryAudit: protectedProcedure.input(projectInput).mutation(async ({ ctx, input }) => {
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    requireProjectRole(data, "producer");
+    const rows = [["Action", "Actor", "Timestamp", "Payload digest", "Signature"], ...data.auditEvents.map(event => [event.action, event.actorName, event.createdAt.toISOString(), event.payloadDigest, event.signature])];
+    const output = rows.map(row => row.map(value => /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value).join(",")).join("\n") + "\n";
+    const filename = `${data.project.title.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase()}-delivery-audit.csv`;
+    const stored = await storagePut(`projects/${input.projectId}/reports/${filename}`, output, "text/csv");
+    await createMediaAsset({ id: nanoid(), projectId: input.projectId, kind: "export", storageKey: stored.key, storageUrl: stored.url, filename, mimeType: "text/csv", sizeBytes: Buffer.byteLength(output) });
+    await recordActivity({ projectId: input.projectId, eventType: "report_exported", actorUserId: ctx.user.id, actorName: ctx.user.name || "Producer", title: "Signed delivery ledger exported", body: `${filename} is ready for download.`, metadata: { filename, report: "delivery_audit" } });
     return { filename, url: stored.url };
   }),
 });

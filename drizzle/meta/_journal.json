@@ -36,6 +36,20 @@
       "when": 1787319255268,
       "tag": "0004_famous_bulldozer",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1787320139141,
+      "tag": "0005_smooth_gamora",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1787320642857,
+      "tag": "0006_fast_kang",
+      "breakpoints": true
     }
   ]
 }

@@ -4,10 +4,12 @@ import {
   cueAssignments,
   cueComments,
   cueStatusHistory,
+  deliveryAuditEvents,
   InsertUser,
   mediaAssets,
   processingRuns,
   projectInvitations,
+  projectActivities,
   projectMemberships,
   subtitleCues,
   subtitleProjects,
@@ -164,6 +166,8 @@ export async function deleteSubtitleProject(userId: number, projectId: string) {
   await db.delete(cueStatusHistory).where(eq(cueStatusHistory.projectId, projectId));
   await db.delete(projectMemberships).where(eq(projectMemberships.projectId, projectId));
   await db.delete(projectInvitations).where(eq(projectInvitations.projectId, projectId));
+  await db.delete(projectActivities).where(eq(projectActivities.projectId, projectId));
+  await db.delete(deliveryAuditEvents).where(eq(deliveryAuditEvents.projectId, projectId));
   const sessions = await db.select({ id: uploadSessions.id }).from(uploadSessions).where(eq(uploadSessions.projectId, projectId));
   for (const session of sessions) await db.delete(uploadParts).where(eq(uploadParts.sessionId, session.id));
   await db.delete(uploadSessions).where(eq(uploadSessions.projectId, projectId));
@@ -176,7 +180,7 @@ export async function getProjectEditorData(userId: number, projectId: string) {
   if (!access) return undefined;
   const { project, accessRole } = access;
   const db = requireDb(await getDb());
-  const [assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations] = await Promise.all([
+  const [assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations, activities, auditEvents] = await Promise.all([
     db.select().from(mediaAssets).where(eq(mediaAssets.projectId, projectId)),
     db.select().from(subtitleTracks).where(eq(subtitleTracks.projectId, projectId)),
     db.select().from(subtitleCues).where(eq(subtitleCues.projectId, projectId)).orderBy(subtitleCues.sequence),
@@ -187,8 +191,10 @@ export async function getProjectEditorData(userId: number, projectId: string) {
     db.select().from(cueStatusHistory).where(eq(cueStatusHistory.projectId, projectId)).orderBy(desc(cueStatusHistory.createdAt)),
     db.select().from(projectMemberships).where(eq(projectMemberships.projectId, projectId)).orderBy(desc(projectMemberships.createdAt)),
     db.select().from(projectInvitations).where(eq(projectInvitations.projectId, projectId)).orderBy(desc(projectInvitations.createdAt)),
+    db.select().from(projectActivities).where(eq(projectActivities.projectId, projectId)).orderBy(desc(projectActivities.createdAt)),
+    db.select().from(deliveryAuditEvents).where(eq(deliveryAuditEvents.projectId, projectId)).orderBy(desc(deliveryAuditEvents.createdAt)),
   ]);
-  return { project, accessRole, assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations };
+  return { project, accessRole, assets, tracks, cues, translations, runs, assignments, comments, history, memberships, invitations, activities, auditEvents };
 }
 
 export async function createMediaAsset(values: typeof mediaAssets.$inferInsert) {
@@ -295,4 +301,14 @@ export async function updateProjectInvitation(id: string, values: Partial<typeof
 export async function createProjectMembership(values: typeof projectMemberships.$inferInsert) {
   const db = requireDb(await getDb());
   await db.insert(projectMemberships).values(values);
+}
+
+export async function createProjectActivity(values: typeof projectActivities.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(projectActivities).values(values);
+}
+
+export async function createDeliveryAuditEvent(values: typeof deliveryAuditEvents.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(deliveryAuditEvents).values(values);
 }

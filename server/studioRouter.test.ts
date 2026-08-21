@@ -2,14 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
 
 const db = vi.hoisted(() => ({
-  createCueComment: vi.fn(), createCueStatusHistory: vi.fn(), createMediaAsset: vi.fn(), createProcessingRun: vi.fn(), createProjectInvitation: vi.fn(), createProjectMembership: vi.fn(), createSubtitleProject: vi.fn(), createSubtitleTrack: vi.fn(), createTranslationRun: vi.fn(),
+  createCueComment: vi.fn(), createCueStatusHistory: vi.fn(), createDeliveryAuditEvent: vi.fn(), createMediaAsset: vi.fn(), createProcessingRun: vi.fn(), createProjectActivity: vi.fn(), createProjectInvitation: vi.fn(), createProjectMembership: vi.fn(), createSubtitleProject: vi.fn(), createSubtitleTrack: vi.fn(), createTranslationRun: vi.fn(),
   deleteSubtitleProject: vi.fn(), getInvitationByToken: vi.fn(), getProjectEditorData: vi.fn(), listProjectsForUser: vi.fn(), replaceTrackCues: vi.fn(), updateCue: vi.fn(),
   updateProcessingRun: vi.fn(), updateProjectInvitation: vi.fn(), updateSubtitleProject: vi.fn(), updateTranslationRun: vi.fn(), upsertCueAssignment: vi.fn(),
 }));
 const storage = vi.hoisted(() => ({ storagePut: vi.fn() }));
+const ownerNotification = vi.hoisted(() => ({ notifyOwner: vi.fn().mockResolvedValue(true) }));
 
 vi.mock("./db", () => db);
 vi.mock("./storage", () => storage);
+vi.mock("./_core/notification", () => ownerNotification);
 
 import { appRouter } from "./routers";
 
@@ -20,7 +22,7 @@ const editorData = {
   tracks: [{ id: "track-1", projectId: "project-1", name: "English", language: "en", format: "srt", isPrimary: true, styleProfile: null, createdAt: new Date(), updatedAt: new Date() }],
   cues: [{ id: "cue-1", projectId: "project-1", trackId: "track-1", sequence: 1, startMs: 1_000, endMs: 2_000, plainText: "Hello", richText: "<i>Hello</i>", assStyle: null, speaker: null, alignmentConfidence: 0, qaStatus: "needs_review" as const, qaReason: "Alignment confidence fell below the 75% QA threshold.", sourceMetadata: null, createdAt: new Date(), updatedAt: new Date() }],
   translations: [],
-  runs: [], assignments: [], comments: [], history: [], memberships: [], invitations: [],
+  runs: [], assignments: [], comments: [], history: [], memberships: [], invitations: [], activities: [], auditEvents: [],
 };
 
 function authenticatedContext(): TrpcContext {
@@ -63,6 +65,14 @@ describe("studio router", () => {
     expect(result).toEqual({ filename: "master-dialogue-en.srt", url: "/manus-storage/exports/master.srt" });
   });
 
+  it("records a signed audit event and in-app activity for an approved subtitle export", async () => {
+    db.getProjectEditorData.mockResolvedValue(editorData);
+    storage.storagePut.mockResolvedValue({ key: "exports/master.srt", url: "/manus-storage/exports/master.srt" });
+    await appRouter.createCaller(authenticatedContext()).studio.export({ projectId: "project-1", trackId: "track-1", format: "srt" });
+    expect(db.createDeliveryAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", action: "subtitle_exported", payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/), signature: expect.stringMatching(/^[a-f0-9]{64}$/) }));
+    expect(db.createProjectActivity).toHaveBeenCalledWith(expect.objectContaining({ eventType: "subtitle_exported" }));
+  });
+
   it("blocks subtitle delivery until producer approval", async () => {
     db.getProjectEditorData.mockResolvedValue({ ...editorData, project: { ...editorData.project, deliveryStatus: "draft" } });
     await expect(appRouter.createCaller(authenticatedContext()).studio.export({ projectId: "project-1", trackId: "track-1", format: "srt" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
@@ -71,8 +81,25 @@ describe("studio router", () => {
   it("creates a time-limited collaborator invitation for the project owner", async () => {
     db.getProjectEditorData.mockResolvedValue(editorData);
     const result = await appRouter.createCaller(authenticatedContext()).studio.inviteCollaborator({ projectId: "project-1", email: "reviewer@example.com", role: "reviewer" });
-    expect(db.createProjectInvitation).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", email: "reviewer@example.com", role: "reviewer", invitedByUserId: 42, status: "pending" }));
+    expect(db.createProjectInvitation).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", email: "reviewer@example.com", role: "reviewer", invitedByUserId: 42, status: "pending", deliveryMode: "link_copy", deliveryStatus: "deferred" }));
+    expect(db.createProjectActivity).toHaveBeenCalledWith(expect.objectContaining({ eventType: "invitation_created", metadata: expect.objectContaining({ delivery: "link_copy_fallback" }) }));
+    expect(ownerNotification.notifyOwner).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining("Collaborator invite prepared") }));
     expect(result.token).toHaveLength(40);
+  });
+
+  it("records manual secure-link delivery after an owner copies an invitation", async () => {
+    db.getProjectEditorData.mockResolvedValue({ ...editorData, invitations: [{ id: "invite-copy", email: "reviewer@example.com", status: "pending" }] });
+    const result = await appRouter.createCaller(authenticatedContext()).studio.markInvitationLinkCopied({ projectId: "project-1", invitationId: "invite-copy" });
+    expect(db.updateProjectInvitation).toHaveBeenCalledWith("invite-copy", expect.objectContaining({ deliveryStatus: "link_copied", deliveryMode: "link_copy" }));
+    expect(result).toEqual({ success: true });
+  });
+
+  it("exports a producer-visible signed delivery ledger", async () => {
+    db.getProjectEditorData.mockResolvedValue({ ...editorData, auditEvents: [{ id: "audit-1", action: "delivery_approved", actorName: "Studio User", createdAt: new Date("2026-08-21T12:00:00.000Z"), payloadDigest: "a".repeat(64), signature: "b".repeat(64) }] });
+    storage.storagePut.mockResolvedValue({ key: "reports/audit.csv", url: "/manus-storage/reports/audit.csv" });
+    const result = await appRouter.createCaller(authenticatedContext()).studio.exportDeliveryAudit({ projectId: "project-1" });
+    expect(storage.storagePut).toHaveBeenCalledWith(expect.stringContaining("delivery-audit.csv"), expect.stringContaining("Payload digest"), "text/csv");
+    expect(result.url).toBe("/manus-storage/reports/audit.csv");
   });
 
   it("accepts a valid email-bound invitation and creates a collaborator membership", async () => {

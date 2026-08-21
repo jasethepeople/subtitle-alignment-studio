@@ -186,6 +186,34 @@ export const projectInvitations = mysqlTable("projectInvitations", {
   expiresAt: timestamp("expiresAt").notNull(),
   acceptedAt: timestamp("acceptedAt"),
   acceptedByUserId: int("acceptedByUserId"),
+  deliveryMode: mysqlEnum("deliveryMode", ["provider_email", "link_copy"]).default("link_copy").notNull(),
+  deliveryStatus: mysqlEnum("deliveryStatus", ["deferred", "link_copied", "sent", "failed"]).default("deferred").notNull(),
+  deliveredAt: timestamp("deliveredAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const projectActivities = mysqlTable("projectActivities", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  eventType: mysqlEnum("eventType", ["invitation_created", "invitation_accepted", "invitation_revoked", "qa_completed", "delivery_submitted", "delivery_approved", "subtitle_exported", "report_exported"]).notNull(),
+  actorUserId: int("actorUserId"),
+  actorName: varchar("actorName", { length: 128 }),
+  recipientUserId: int("recipientUserId"),
+  title: varchar("title", { length: 180 }).notNull(),
+  body: text("body").notNull(),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const deliveryAuditEvents = mysqlTable("deliveryAuditEvents", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  action: mysqlEnum("action", ["approval_requested", "delivery_approved", "subtitle_exported"]).notNull(),
+  actorUserId: int("actorUserId").notNull(),
+  actorName: varchar("actorName", { length: 128 }).notNull(),
+  payload: json("payload").notNull(),
+  payloadDigest: varchar("payloadDigest", { length: 64 }).notNull(),
+  signature: varchar("signature", { length: 128 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
