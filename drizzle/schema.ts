@@ -33,6 +33,8 @@ export const subtitleProjects = mysqlTable("subtitleProjects", {
   status: mysqlEnum("status", ["draft", "queued", "processing", "ready", "attention", "failed"]).default("draft").notNull(),
   durationMs: int("durationMs"),
   activeTrackId: varchar("activeTrackId", { length: 36 }),
+  uploadConcurrency: int("uploadConcurrency").default(2).notNull(),
+  uploadRetryLimit: int("uploadRetryLimit").default(3).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -126,6 +128,39 @@ export const uploadParts = mysqlTable("uploadParts", {
   partNumber: int("partNumber").notNull(),
   storageKey: text("storageKey").notNull(),
   sizeBytes: bigint("sizeBytes", { mode: "number" }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const cueAssignments = mysqlTable("cueAssignments", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  cueId: varchar("cueId", { length: 36 }).notNull(),
+  assigneeUserId: int("assigneeUserId"),
+  assigneeName: varchar("assigneeName", { length: 128 }).notNull(),
+  assignedByUserId: int("assignedByUserId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const cueComments = mysqlTable("cueComments", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  cueId: varchar("cueId", { length: 36 }).notNull(),
+  authorUserId: int("authorUserId").notNull(),
+  authorName: varchar("authorName", { length: 128 }).notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const cueStatusHistory = mysqlTable("cueStatusHistory", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  projectId: varchar("projectId", { length: 36 }).notNull(),
+  cueId: varchar("cueId", { length: 36 }).notNull(),
+  previousStatus: mysqlEnum("previousStatus", ["clear", "needs_review", "approved"]),
+  nextStatus: mysqlEnum("nextStatus", ["clear", "needs_review", "approved"]).notNull(),
+  reason: text("reason"),
+  changedByUserId: int("changedByUserId"),
+  changedByName: varchar("changedByName", { length: 128 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

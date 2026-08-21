@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
 
 const db = vi.hoisted(() => ({
-  createMediaAsset: vi.fn(), createProcessingRun: vi.fn(), createSubtitleProject: vi.fn(), createSubtitleTrack: vi.fn(), createTranslationRun: vi.fn(),
+  createCueComment: vi.fn(), createCueStatusHistory: vi.fn(), createMediaAsset: vi.fn(), createProcessingRun: vi.fn(), createSubtitleProject: vi.fn(), createSubtitleTrack: vi.fn(), createTranslationRun: vi.fn(),
   deleteSubtitleProject: vi.fn(), getProjectEditorData: vi.fn(), listProjectsForUser: vi.fn(), replaceTrackCues: vi.fn(), updateCue: vi.fn(),
-  updateProcessingRun: vi.fn(), updateSubtitleProject: vi.fn(), updateTranslationRun: vi.fn(),
+  updateProcessingRun: vi.fn(), updateSubtitleProject: vi.fn(), updateTranslationRun: vi.fn(), upsertCueAssignment: vi.fn(),
 }));
 const storage = vi.hoisted(() => ({ storagePut: vi.fn() }));
 
@@ -19,7 +19,7 @@ const editorData = {
   tracks: [{ id: "track-1", projectId: "project-1", name: "English", language: "en", format: "srt", isPrimary: true, styleProfile: null, createdAt: new Date(), updatedAt: new Date() }],
   cues: [{ id: "cue-1", projectId: "project-1", trackId: "track-1", sequence: 1, startMs: 1_000, endMs: 2_000, plainText: "Hello", richText: "<i>Hello</i>", assStyle: null, speaker: null, alignmentConfidence: 0, qaStatus: "needs_review" as const, qaReason: "Alignment confidence fell below the 75% QA threshold.", sourceMetadata: null, createdAt: new Date(), updatedAt: new Date() }],
   translations: [],
-  runs: [],
+  runs: [], assignments: [], comments: [], history: [],
 };
 
 function authenticatedContext(): TrpcContext {
@@ -34,6 +34,16 @@ describe("studio router", () => {
   it("requires an authenticated user before listing subtitle projects", async () => {
     const caller = appRouter.createCaller({ ...authenticatedContext(), user: null });
     await expect(caller.studio.list()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("requires authentication before reading project review history", async () => {
+    const caller = appRouter.createCaller({ ...authenticatedContext(), user: null });
+    await expect(caller.studio.get({ projectId: "project-1" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("requires authentication before adding reviewer comments", async () => {
+    const caller = appRouter.createCaller({ ...authenticatedContext(), user: null });
+    await expect(caller.studio.addCueComment({ projectId: "project-1", cueId: "cue-1", body: "Untrusted note" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
   it("creates a user-owned session through the project API", async () => {
@@ -56,6 +66,13 @@ describe("studio router", () => {
     db.getProjectEditorData.mockResolvedValue(editorData);
     const result = await appRouter.createCaller(authenticatedContext()).studio.updateCueQa({ projectId: "project-1", cueId: "cue-1", qaStatus: "approved" });
     expect(db.updateCue).toHaveBeenCalledWith("project-1", "cue-1", { qaStatus: "approved", qaReason: null });
+    expect(result).toEqual({ success: true });
+  });
+
+  it("stores a reviewer note only after confirming project ownership", async () => {
+    db.getProjectEditorData.mockResolvedValue(editorData);
+    const result = await appRouter.createCaller(authenticatedContext()).studio.addCueComment({ projectId: "project-1", cueId: "cue-1", body: "Check the speaker handoff." });
+    expect(db.createCueComment).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-1", cueId: "cue-1", authorUserId: 42, body: "Check the speaker handoff." }));
     expect(result).toEqual({ success: true });
   });
 });

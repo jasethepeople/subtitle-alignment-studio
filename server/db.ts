@@ -1,6 +1,9 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
+  cueAssignments,
+  cueComments,
+  cueStatusHistory,
   InsertUser,
   mediaAssets,
   processingRuns,
@@ -136,6 +139,9 @@ export async function deleteSubtitleProject(userId: number, projectId: string) {
   await db.delete(mediaAssets).where(eq(mediaAssets.projectId, projectId));
   await db.delete(translationRuns).where(eq(translationRuns.projectId, projectId));
   await db.delete(processingRuns).where(eq(processingRuns.projectId, projectId));
+  await db.delete(cueAssignments).where(eq(cueAssignments.projectId, projectId));
+  await db.delete(cueComments).where(eq(cueComments.projectId, projectId));
+  await db.delete(cueStatusHistory).where(eq(cueStatusHistory.projectId, projectId));
   const sessions = await db.select({ id: uploadSessions.id }).from(uploadSessions).where(eq(uploadSessions.projectId, projectId));
   for (const session of sessions) await db.delete(uploadParts).where(eq(uploadParts.sessionId, session.id));
   await db.delete(uploadSessions).where(eq(uploadSessions.projectId, projectId));
@@ -147,14 +153,17 @@ export async function getProjectEditorData(userId: number, projectId: string) {
   const project = await getProjectForUser(userId, projectId);
   if (!project) return undefined;
   const db = requireDb(await getDb());
-  const [assets, tracks, cues, translations, runs] = await Promise.all([
+  const [assets, tracks, cues, translations, runs, assignments, comments, history] = await Promise.all([
     db.select().from(mediaAssets).where(eq(mediaAssets.projectId, projectId)),
     db.select().from(subtitleTracks).where(eq(subtitleTracks.projectId, projectId)),
     db.select().from(subtitleCues).where(eq(subtitleCues.projectId, projectId)).orderBy(subtitleCues.sequence),
     db.select().from(translationRuns).where(eq(translationRuns.projectId, projectId)).orderBy(desc(translationRuns.createdAt)),
     db.select().from(processingRuns).where(eq(processingRuns.projectId, projectId)).orderBy(desc(processingRuns.createdAt)),
+    db.select().from(cueAssignments).where(eq(cueAssignments.projectId, projectId)).orderBy(desc(cueAssignments.updatedAt)),
+    db.select().from(cueComments).where(eq(cueComments.projectId, projectId)).orderBy(desc(cueComments.createdAt)),
+    db.select().from(cueStatusHistory).where(eq(cueStatusHistory.projectId, projectId)).orderBy(desc(cueStatusHistory.createdAt)),
   ]);
-  return { project, assets, tracks, cues, translations, runs };
+  return { project, assets, tracks, cues, translations, runs, assignments, comments, history };
 }
 
 export async function createMediaAsset(values: typeof mediaAssets.$inferInsert) {
@@ -225,4 +234,19 @@ export async function upsertUploadPart(values: typeof uploadParts.$inferInsert) 
 export async function updateUploadSession(sessionId: string, values: Partial<typeof uploadSessions.$inferInsert>) {
   const db = requireDb(await getDb());
   await db.update(uploadSessions).set(values).where(eq(uploadSessions.id, sessionId));
+}
+
+export async function upsertCueAssignment(values: typeof cueAssignments.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(cueAssignments).values(values).onDuplicateKeyUpdate({ set: { assigneeUserId: values.assigneeUserId, assigneeName: values.assigneeName, assignedByUserId: values.assignedByUserId } });
+}
+
+export async function createCueComment(values: typeof cueComments.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(cueComments).values(values);
+}
+
+export async function createCueStatusHistory(values: typeof cueStatusHistory.$inferInsert) {
+  const db = requireDb(await getDb());
+  await db.insert(cueStatusHistory).values(values);
 }

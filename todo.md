@@ -22,3 +22,8 @@
 - [x] Add cue-level alignment QA flags, confidence filters, review state controls, and a low-confidence review queue.
 - [x] Add unit coverage for multipart upload orchestration, VTT/text export fidelity, and QA flag behavior; visually validate the enhanced editor.
 - [x] Add integration-style coverage for multipart session creation, missing-part rejection, and successful source-video finalization.
+- [x] Add persistent project upload preferences for configurable concurrency and retry behavior, plus client-side bounded concurrent chunk scheduling.
+- [x] Add reviewer identities, cue assignments, threaded comments, and immutable cue-status history with authenticated project access.
+- [x] Add deterministic overlap and reading-speed QA analysis, cue-level warning reasons, and QA summary counts.
+- [x] Add editor controls for upload preferences, reviewer assignment, comment threads, history, and one-click automated QA scans.
+- [x] Add test coverage for upload scheduling, review-history authorization, overlap detection, and reading-speed warnings; validate the enhanced workspace visually.

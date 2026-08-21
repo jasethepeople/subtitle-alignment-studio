@@ -3,6 +3,8 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { recommendAlignment, retimeCues, type SpeechMarker } from "./alignment";
 import {
+  createCueComment,
+  createCueStatusHistory,
   createMediaAsset,
   createProcessingRun,
   createSubtitleProject,
@@ -16,12 +18,14 @@ import {
   updateProcessingRun,
   updateSubtitleProject,
   updateTranslationRun,
+  upsertCueAssignment,
 } from "./db";
 import { processVideoForAlignment, transcriptionMarkers } from "./mediaProcessing";
 import { protectedProcedure, router } from "./_core/trpc";
 import { storagePut } from "./storage";
 import { serializeAss, serializePlainText, serializeSrt, serializeVtt } from "./subtitles";
 import { translateCueBatch } from "./translation";
+import { analyzeCueQa } from "./qaChecks";
 
 function requireProject<T>(value: T | undefined): T {
   if (!value) throw new TRPCError({ code: "NOT_FOUND", message: "Subtitle project not found." });
@@ -51,9 +55,44 @@ export const studioRouter = router({
     return { success: true };
   }),
   updateCueQa: protectedProcedure.input(projectInput.extend({ cueId: z.string().min(4).max(64), qaStatus: z.enum(["clear", "needs_review", "approved"]), qaReason: z.string().trim().max(500).optional() })).mutation(async ({ ctx, input }) => {
-    requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    const cue = data.cues.find(item => item.id === input.cueId);
+    if (!cue) throw new TRPCError({ code: "NOT_FOUND", message: "Subtitle cue not found." });
     await updateCue(input.projectId, input.cueId, { qaStatus: input.qaStatus, qaReason: input.qaReason || null });
+    await createCueStatusHistory({ id: nanoid(), projectId: input.projectId, cueId: input.cueId, previousStatus: cue.qaStatus, nextStatus: input.qaStatus, reason: input.qaReason || null, changedByUserId: ctx.user.id, changedByName: ctx.user.name || "Reviewer" });
     return { success: true };
+  }),
+  saveUploadPreferences: protectedProcedure.input(projectInput.extend({ uploadConcurrency: z.number().int().min(1).max(4), uploadRetryLimit: z.number().int().min(0).max(5) })).mutation(async ({ ctx, input }) => {
+    requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    await updateSubtitleProject(input.projectId, { uploadConcurrency: input.uploadConcurrency, uploadRetryLimit: input.uploadRetryLimit });
+    return { success: true };
+  }),
+  assignCue: protectedProcedure.input(projectInput.extend({ cueId: z.string().min(4).max(64), assigneeName: z.string().trim().min(1).max(128) })).mutation(async ({ ctx, input }) => {
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    if (!data.cues.some(cue => cue.id === input.cueId)) throw new TRPCError({ code: "NOT_FOUND", message: "Subtitle cue not found." });
+    await upsertCueAssignment({ id: `${input.projectId}-${input.cueId}`.slice(0, 36), projectId: input.projectId, cueId: input.cueId, assigneeName: input.assigneeName, assigneeUserId: null, assignedByUserId: ctx.user.id });
+    return { success: true };
+  }),
+  addCueComment: protectedProcedure.input(projectInput.extend({ cueId: z.string().min(4).max(64), body: z.string().trim().min(1).max(2_000) })).mutation(async ({ ctx, input }) => {
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    if (!data.cues.some(cue => cue.id === input.cueId)) throw new TRPCError({ code: "NOT_FOUND", message: "Subtitle cue not found." });
+    await createCueComment({ id: nanoid(), projectId: input.projectId, cueId: input.cueId, authorUserId: ctx.user.id, authorName: ctx.user.name || "Reviewer", body: input.body });
+    return { success: true };
+  }),
+  runQa: protectedProcedure.input(projectInput.extend({ trackId: z.string().min(4).max(64).optional() })).mutation(async ({ ctx, input }) => {
+    const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
+    const activeTrackId = input.trackId || data.project.activeTrackId || data.tracks.find(track => track.isPrimary)?.id;
+    const cues = data.cues.filter(cue => cue.trackId === activeTrackId);
+    const findings = analyzeCueQa(cues);
+    const findingByCue = new Map(findings.map(finding => [finding.cueId, finding]));
+    await Promise.all(cues.map(async cue => {
+      const finding = findingByCue.get(cue.id)!;
+      const qaStatus = finding.reasons.length ? "needs_review" : cue.qaStatus === "approved" ? "approved" : "clear";
+      const qaReason = finding.reasons.join(" ") || null;
+      await updateCue(input.projectId, cue.id, { qaStatus, qaReason });
+      if (cue.qaStatus !== qaStatus || cue.qaReason !== qaReason) await createCueStatusHistory({ id: nanoid(), projectId: input.projectId, cueId: cue.id, previousStatus: cue.qaStatus, nextStatus: qaStatus, reason: qaReason, changedByUserId: ctx.user.id, changedByName: ctx.user.name || "QA scan" });
+    }));
+    return { scanned: cues.length, flagged: findings.filter(finding => finding.reasons.length).length, overlapFlags: findings.filter(finding => finding.overlapMs > 0).length, speedFlags: findings.filter(finding => finding.charactersPerSecond > 20).length };
   }),
   autoAlign: protectedProcedure.input(projectInput).mutation(async ({ ctx, input }) => {
     const data = requireProject(await getProjectEditorData(ctx.user.id, input.projectId));
